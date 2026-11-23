@@ -1,0 +1,154 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v0.5.2)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: false
+
+      - name: Resolve release tag and version
+        id: meta
+        shell: pwsh
+        run: |
+          $tag = if ("${{ github.event_name }}" -eq "workflow_dispatch") { "${{ inputs.tag }}" } else { "${{ github.ref_name }}" }
+          if (-not $tag.StartsWith("v")) { $tag = "v$tag" }
+          $ver = $tag.TrimStart("v")
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "version=$ver" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "Release tag=$tag version=$ver"
+
+      - name: Run vet, unit tests, and Windows self-test
+        shell: pwsh
+        run: |
+          $env:CGO_ENABLED = "0"
+          go vet ./...
+          go test -v ./...
+          .\build.ps1 -Clean -SelfTest -Version "${{ steps.meta.outputs.version }}"
+
+      - name: Build and package multi-platform release artifacts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $tag = "${{ steps.meta.outputs.tag }}"
+          $ver = "${{ steps.meta.outputs.version }}"
+          $dist = Join-Path $PWD "dist"
+          if (Test-Path $dist) { Remove-Item -Recurse -Force $dist }
+          New-Item -ItemType Directory -Force -Path $dist | Out-Null
+
+          $env:CGO_ENABLED = "0"
+          $cliLdFlags = "-s -w -X browserforge/internal/common.AppVersion=$ver"
+          $guiLdFlags = "$cliLdFlags -H=windowsgui"
+
+          # Windows targets (CLI + foreground tray daemon)
+          foreach ($arch in @("amd64", "arm64")) {
+            $stage = Join-Path $dist "stage_windows_$arch"
+            New-Item -ItemType Directory -Force -Path $stage | Out-Null
+            $env:GOOS = "windows"
+            $env:GOARCH = $arch
+
+            go build -trimpath -ldflags $cliLdFlags -o (Join-Path $stage "browserforge.exe") ./cmd/browserforge
+            if ($LASTEXITCODE -ne 0) { throw "build windows/$arch cli failed" }
+
+            go build -trimpath -ldflags $guiLdFlags -o (Join-Path $stage "browserforge-daemon.exe") ./cmd/browserforge-daemon
+            if ($LASTEXITCODE -ne 0) { throw "build windows/$arch daemon failed" }
+
+            Copy-Item -Force "README.md" (Join-Path $stage "README.md")
+            Copy-Item -Recurse -Force "skills" (Join-Path $stage "skills")
+
+            $zipPath = Join-Path $dist "browserforge_${tag}_windows_${arch}.zip"
+            Compress-Archive -Path (Join-Path $stage "*") -DestinationPath $zipPath -Force
+            Remove-Item -Recurse -Force $stage
+          }
+
+          # Linux & macOS targets (CLI + skill)
+          $unixTargets = @(
+            @{ goos = "linux";  goarch = "amd64" },
+            @{ goos = "linux";  goarch = "arm64" },
+            @{ goos = "darwin"; goarch = "amd64" },
+            @{ goos = "darwin"; goarch = "arm64" }
+          )
+          foreach ($t in $unixTargets) {
+            $os = $t.goos
+            $arch = $t.goarch
+            $stage = Join-Path $dist "stage_${os}_${arch}"
+            New-Item -ItemType Directory -Force -Path $stage | Out-Null
+            $env:GOOS = $os
+            $env:GOARCH = $arch
+
+            go build -trimpath -ldflags $cliLdFlags -o (Join-Path $stage "browserforge") ./cmd/browserforge
+            if ($LASTEXITCODE -ne 0) { throw "build ${os}/${arch} cli failed" }
+
+            Copy-Item -Force "README.md" (Join-Path $stage "README.md")
+            Copy-Item -Recurse -Force "skills" (Join-Path $stage "skills")
+
+            $tarPath = Join-Path $dist "browserforge_${tag}_${os}_${arch}.tar.gz"
+            tar -czf $tarPath -C $stage .
+            if ($LASTEXITCODE -ne 0) { throw "tar ${os}/${arch} failed" }
+            Remove-Item -Recurse -Force $stage
+          }
+
+          Remove-Item Env:GOOS, Env:GOARCH -ErrorAction SilentlyContinue
+
+          # Generate SHA256SUMS.txt
+          $archives = Get-ChildItem -Path $dist -File | Sort-Object Name
+          $lines = foreach ($f in $archives) {
+            $h = (Get-FileHash -Path $f.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$h  $($f.Name)"
+          }
+          $lines | Set-Content -Path (Join-Path $dist "SHA256SUMS.txt") -Encoding ascii
+
+          Get-ChildItem -Path $dist -File | Select-Object Name, Length | Format-Table -AutoSize
+
+      - name: Publish GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $tag = "${{ steps.meta.outputs.tag }}"
+          $files = (Get-ChildItem -Path "dist" -File | Sort-Object Name | ForEach-Object { $_.FullName })
+
+          $notes = @"
+          ## BrowserForge $tag
+
+          Standalone zero-dependency Go CLI & Windows foreground tray daemon for isolated anti-detect browser environments (`beryl-v1`), per-profile authenticated proxy forwarding, and humanized CDP automation.
+
+          ### Downloads
+          - **Windows x64** (`browserforge_${tag}_windows_amd64.zip`): `browserforge.exe`, `browserforge-daemon.exe`, `README.md`, and companion AI Agent Skill (`skills/browserforge/`).
+          - **Windows ARM64** (`browserforge_${tag}_windows_arm64.zip`): `browserforge.exe`, `browserforge-daemon.exe`, `README.md`, and `skills/browserforge/`.
+          - **Linux / macOS** (`*.tar.gz`): `browserforge` CLI binary, `README.md`, and `skills/browserforge/`.
+          - Verify integrity with `SHA256SUMS.txt`.
+          "@
+
+          $exists = $false
+          try {
+            gh release view $tag *> $null
+            if ($LASTEXITCODE -eq 0) { $exists = $true }
+          } catch {}
+
+          if ($exists) {
+            gh release upload $tag @files --clobber
+          } else {
+            $notesFile = Join-Path $PWD "dist\RELEASE_NOTES.md"
+            $notes | Set-Content -Path $notesFile -Encoding utf8
+            gh release create $tag @files --title "BrowserForge $tag" --notes-file $notesFile
+          }
