@@ -7,13 +7,15 @@ description: Operate the standalone BrowserForge Go CLI and foreground tray daem
 
 Use this skill to manage isolated anti-detect browser profiles and drive live pages via `browserforge.exe` + the optional foreground system-tray daemon `browserforge-daemon.exe` (pure Go, zero external dependencies).
 
-## Locating the Binary
+## Locating & Installing the Binary
 
 Use the helper wrapper `scripts/browserforge-cli.ps1` which resolves `BROWSERFORGE_BIN`, `bin\browserforge.exe`, `%LOCALAPPDATA%\BrowserForge\bin\browserforge.exe`, or `PATH` automatically:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/browserforge-cli.ps1 doctor --json
 ```
+
+If `browserforge.exe` is not installed yet, download the latest prebuilt archive from [GitHub Releases](https://github.com/yattin/browserforge/releases/latest) (e.g. `browserforge_vX.Y.Z_windows_amd64.zip`) and extract `browserforge.exe` + `browserforge-daemon.exe` into `%LOCALAPPDATA%\BrowserForge\bin\` (or any directory on `PATH`).
 
 ## Standard Workflow
 

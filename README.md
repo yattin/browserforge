@@ -10,6 +10,14 @@ Standalone, zero-dependency Go CLI for managing isolated anti-detect browser env
 - **Native RFC 6455 CDP Automation**: `tabs`, `open`, `snapshot`, `click`, `type` (React/Vue compatible), `eval`, `screenshot`, and `cookies` (redacted by default).
 - **Encrypted Credential Storage**: Windows DPAPI (`CurrentUser` scope) on Windows; `0600` local key + AES-256-GCM on non-Windows platforms.
 
+## Download from GitHub Releases
+
+Prebuilt binaries and the standalone AI Agent Skill package are published on [GitHub Releases](https://github.com/yattin/browserforge/releases/latest):
+
+- **Windows x64 / ARM64** (`browserforge_v*_windows_*.zip`): `browserforge.exe`, `browserforge-daemon.exe` (silent Windows tray daemon), `README.md`, and `skills/browserforge/`.
+- **Linux / macOS** (`browserforge_v*_*.tar.gz`): `browserforge` CLI binary, `README.md`, and `skills/browserforge/`.
+- **Standalone AI Agent Skill** (`browserforge-skill_v*.zip`): extract directly into your agent's skills directory (e.g. `~/.gemini/config/skills/`, `~/.claude/skills/`, or `.agents/skills/`).
+
 ## Build & Self-Test
 
 ```powershell

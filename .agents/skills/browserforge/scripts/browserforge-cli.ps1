@@ -15,7 +15,7 @@ if (-not $Exe) {
     if ($Cmd) { $Exe = $Cmd.Source }
 }
 if (-not $Exe) {
-    throw "browserforge.exe not found. Build with build.ps1, install to %LOCALAPPDATA%\BrowserForge\bin, or set BROWSERFORGE_BIN."
+    throw "browserforge.exe not found. Download from https://github.com/yattin/browserforge/releases/latest and extract to %LOCALAPPDATA%\BrowserForge\bin, build with build.ps1, or set BROWSERFORGE_BIN."
 }
 
 & $Exe @args

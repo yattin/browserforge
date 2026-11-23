@@ -108,6 +108,14 @@ jobs:
 
           Remove-Item Env:GOOS, Env:GOARCH -ErrorAction SilentlyContinue
 
+          # Standalone AI Agent Skill package (extracts directly as browserforge/SKILL.md)
+          $skillStage = Join-Path $dist "stage_skill"
+          New-Item -ItemType Directory -Force -Path $skillStage | Out-Null
+          Copy-Item -Recurse -Force "skills\browserforge" (Join-Path $skillStage "browserforge")
+          $skillZip = Join-Path $dist "browserforge-skill_${tag}.zip"
+          Compress-Archive -Path (Join-Path $skillStage "browserforge") -DestinationPath $skillZip -Force
+          Remove-Item -Recurse -Force $skillStage
+
           # Generate SHA256SUMS.txt
           $archives = Get-ChildItem -Path $dist -File | Sort-Object Name
           $lines = foreach ($f in $archives) {
@@ -136,8 +144,12 @@ jobs:
           - **Windows x64** (`browserforge_${tag}_windows_amd64.zip`): `browserforge.exe`, `browserforge-daemon.exe`, `README.md`, and companion AI Agent Skill (`skills/browserforge/`).
           - **Windows ARM64** (`browserforge_${tag}_windows_arm64.zip`): `browserforge.exe`, `browserforge-daemon.exe`, `README.md`, and `skills/browserforge/`.
           - **Linux / macOS** (`*.tar.gz`): `browserforge` CLI binary, `README.md`, and `skills/browserforge/`.
+          - **Standalone AI Agent Skill** (`browserforge-skill_${tag}.zip`): extract directly into your agent's skills directory (e.g. `~/.gemini/config/skills/`, `~/.claude/skills/`, or `.agents/skills/`).
           - Verify integrity with `SHA256SUMS.txt`.
           "@
+
+          $notesFile = Join-Path $PWD "dist\RELEASE_NOTES.md"
+          $notes | Set-Content -Path $notesFile -Encoding utf8
 
           $exists = $false
           try {
@@ -147,8 +159,7 @@ jobs:
 
           if ($exists) {
             gh release upload $tag @files --clobber
+            gh release edit $tag --title "BrowserForge $tag" --notes-file $notesFile
           } else {
-            $notesFile = Join-Path $PWD "dist\RELEASE_NOTES.md"
-            $notes | Set-Content -Path $notesFile -Encoding utf8
             gh release create $tag @files --title "BrowserForge $tag" --notes-file $notesFile
           }
