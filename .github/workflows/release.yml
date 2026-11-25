@@ -58,8 +58,27 @@ jobs:
           $cliLdFlags = "-s -w -X browserforge/internal/common.AppVersion=$ver"
           $guiLdFlags = "$cliLdFlags -H=windowsgui"
 
-          # Windows targets (CLI + foreground tray daemon)
-          foreach ($arch in @("amd64", "arm64")) {
+          # Windows targets (CLI + foreground tray daemon + Inno Setup graphical installer)
+          $iscc = Get-Command iscc -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source
+          if (-not $iscc) {
+            foreach ($cand in @(
+              "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
+              "C:\Program Files\Inno Setup 6\ISCC.exe"
+            )) {
+              if (Test-Path $cand) { $iscc = $cand; break }
+            }
+          }
+          if (-not $iscc) {
+            choco install innosetup -y --no-progress
+            $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          }
+          if (-not (Test-Path $iscc)) { throw "Inno Setup compiler (ISCC.exe) not found" }
+
+          foreach ($t in @(
+            @{ arch = "amd64"; suffix = "x64";   mode = "x64compatible" },
+            @{ arch = "arm64"; suffix = "arm64"; mode = "arm64" }
+          )) {
+            $arch = $t.arch
             $stage = Join-Path $dist "stage_windows_$arch"
             New-Item -ItemType Directory -Force -Path $stage | Out-Null
             $env:GOOS = "windows"
@@ -72,10 +91,16 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "build windows/$arch daemon failed" }
 
             Copy-Item -Force "README.md" (Join-Path $stage "README.md")
+            Copy-Item -Force "assets\browserforge.ico" (Join-Path $stage "browserforge.ico")
             Copy-Item -Recurse -Force "skills" (Join-Path $stage "skills")
 
             $zipPath = Join-Path $dist "browserforge_${tag}_windows_${arch}.zip"
             Compress-Archive -Path (Join-Path $stage "*") -DestinationPath $zipPath -Force
+
+            # Build graphical Windows Setup EXE via Inno Setup
+            & $iscc "/DAppVersion=$ver" "/DSourceDir=$stage" "/DArchSuffix=$($t.suffix)" "/DArchMode=$($t.mode)" "installer\browserforge.iss"
+            if ($LASTEXITCODE -ne 0) { throw "Inno Setup build failed for windows/$arch" }
+
             Remove-Item -Recurse -Force $stage
           }
 
@@ -141,8 +166,8 @@ jobs:
           Standalone zero-dependency Go CLI & Windows foreground tray daemon for isolated anti-detect browser environments (`beryl-v1`), per-profile authenticated proxy forwarding, and humanized CDP automation.
 
           ### Downloads
-          - **Windows x64** (`browserforge_${tag}_windows_amd64.zip`): `browserforge.exe`, `browserforge-daemon.exe`, `README.md`, and companion AI Agent Skill (`skills/browserforge/`).
-          - **Windows ARM64** (`browserforge_${tag}_windows_arm64.zip`): `browserforge.exe`, `browserforge-daemon.exe`, `README.md`, and `skills/browserforge/`.
+          - **Windows Installer (Recommended)** (`BrowserForge-Setup-${tag}-x64.exe` / `arm64.exe`): Graphical setup wizard with custom brand icon, desktop shortcut, Windows startup autostart (`HKCU\...\Run`), user `PATH` integration, system tray daemon, and standard uninstaller.
+          - **Windows Portable** (`browserforge_${tag}_windows_amd64.zip` / `arm64.zip`): `browserforge.exe`, `browserforge-daemon.exe`, `browserforge.ico`, `README.md`, and `skills/browserforge/`.
           - **Linux / macOS** (`*.tar.gz`): `browserforge` CLI binary, `README.md`, and `skills/browserforge/`.
           - **Standalone AI Agent Skill** (`browserforge-skill_${tag}.zip`): extract directly into your agent's skills directory (e.g. `~/.gemini/config/skills/`, `~/.claude/skills/`, or `.agents/skills/`).
           - Verify integrity with `SHA256SUMS.txt`.

@@ -3,6 +3,8 @@
 package main
 
 import (
+	_ "embed"
+	"encoding/binary"
 	"fmt"
 	"runtime"
 	"syscall"
@@ -10,6 +12,9 @@ import (
 
 	"browserforge/internal/daemon"
 )
+
+//go:embed browserforge.ico
+var embeddedIconICO []byte
 
 var (
 	modUser32   = syscall.NewLazyDLL("user32.dll")
@@ -29,6 +34,7 @@ var (
 	procPostMessageW            = modUser32.NewProc("PostMessageW")
 	procRegisterWindowMessageW  = modUser32.NewProc("RegisterWindowMessageW")
 	procLoadIconW               = modUser32.NewProc("LoadIconW")
+	procCreateIconFromResourceEx = modUser32.NewProc("CreateIconFromResourceEx")
 	procCreateIconIndirect      = modUser32.NewProc("CreateIconIndirect")
 	procDestroyIcon             = modUser32.NewProc("DestroyIcon")
 	procCreatePopupMenu         = modUser32.NewProc("CreatePopupMenu")
@@ -159,8 +165,60 @@ func copyUTF16(dst []uint16, s string) {
 	}
 }
 
-// buildBrandIcon creates a crisp 32x32 emerald rounded-badge icon with a white "B" glyph (pure Win32 GDI).
+// loadEmbeddedTrayIcon parses the embedded multi-size ICO and creates a crisp 32x32 RGBA HICON.
+func loadEmbeddedTrayIcon(ico []byte) uintptr {
+	if len(ico) < 22 {
+		return 0
+	}
+	count := int(binary.LittleEndian.Uint16(ico[4:6]))
+	if count <= 0 || len(ico) < 6+count*16 {
+		return 0
+	}
+	// Pick the 32x32 entry (or closest >= 32, fallback to first entry)
+	bestOff, bestLen, bestDiff := 0, 0, 999999
+	for i := 0; i < count; i++ {
+		base := 6 + i*16
+		w := int(ico[base])
+		if w == 0 {
+			w = 256
+		}
+		size := int(binary.LittleEndian.Uint32(ico[base+8 : base+12]))
+		off := int(binary.LittleEndian.Uint32(ico[base+12 : base+16]))
+		if off < 0 || size <= 0 || off+size > len(ico) {
+			continue
+		}
+		diff := w - 32
+		if diff < 0 {
+			diff = -diff + 100 // prefer >= 32 over upscaling smaller
+		}
+		if diff < bestDiff {
+			bestDiff = diff
+			bestOff = off
+			bestLen = size
+		}
+	}
+	if bestLen <= 0 {
+		return 0
+	}
+	frame := ico[bestOff : bestOff+bestLen]
+	// LR_DEFAULTCOLOR = 0x0000, dwVer = 0x00030000
+	hIcon, _, _ := procCreateIconFromResourceEx.Call(
+		uintptr(unsafe.Pointer(&frame[0])),
+		uintptr(len(frame)),
+		1,          // fIcon = TRUE
+		0x00030000, // dwVer
+		32,         // cxDesired
+		32,         // cyDesired
+		0,          // Flags
+	)
+	return hIcon
+}
+
+// buildBrandIcon creates a crisp 32x32 tray HICON from the embedded brand ICO (with GDI fallback).
 func buildBrandIcon() uintptr {
+	if h := loadEmbeddedTrayIcon(embeddedIconICO); h != 0 {
+		return h
+	}
 	const size = 32
 	pixels := make([]byte, size*size*4) // BGRA
 	mask := make([]byte, (size/8)*size) // 1-bit AND mask (all 0 = opaque where alpha>0)
@@ -426,10 +484,16 @@ func runTray(srv *daemon.Server, dataDir string) {
 }
 
 func showAlreadyRunningDialog(pid, port int) {
-	title, _ := syscall.UTF16PtrFromString("BrowserForge Daemon")
+	// When the user double-clicks the desktop shortcut while the daemon is already running,
+	// open the live BrowserForge status panel directly.
+	if port > 0 {
+		openShellTarget(fmt.Sprintf("http://127.0.0.1:%d/", port))
+		return
+	}
+	title, _ := syscall.UTF16PtrFromString("BrowserForge")
 	body, _ := syscall.UTF16PtrFromString(fmt.Sprintf(
-		"BrowserForge Daemon is already running.\n\nPID: %d\nAddress: 127.0.0.1:%d\n\nLook for the green \"B\" icon in your Windows system tray (bottom-right).",
-		pid, port,
+		"BrowserForge Daemon is already running (PID: %d).\n\nLook for the BrowserForge icon in your Windows system tray.",
+		pid,
 	))
 	procMessageBoxW.Call(0, uintptr(unsafe.Pointer(body)), uintptr(unsafe.Pointer(title)), mbOK|mbIconInfo)
 }

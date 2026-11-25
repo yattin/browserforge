@@ -1,6 +1,10 @@
+<p align="center">
+  <img src="assets/browserforge.png" alt="BrowserForge" width="96" height="96" />
+</p>
+
 # BrowserForge
 
-Standalone, zero-dependency Go CLI for managing isolated anti-detect browser environments, `beryl-v1` deterministic fingerprints, per-profile authenticated proxy forwarders, and native CDP automation.
+Standalone, zero-dependency Go CLI & Windows tray daemon for managing isolated anti-detect browser environments, `beryl-v1` deterministic fingerprints, per-profile authenticated proxy forwarders, and native CDP automation.
 
 ## Features
 
@@ -12,9 +16,10 @@ Standalone, zero-dependency Go CLI for managing isolated anti-detect browser env
 
 ## Download from GitHub Releases
 
-Prebuilt binaries and the standalone AI Agent Skill package are published on [GitHub Releases](https://github.com/yattin/browserforge/releases/latest):
+Prebuilt Windows graphical installers, portable archives, and the standalone AI Agent Skill package are published on [GitHub Releases](https://github.com/yattin/browserforge/releases/latest):
 
-- **Windows x64 / ARM64** (`browserforge_v*_windows_*.zip`): `browserforge.exe`, `browserforge-daemon.exe` (silent Windows tray daemon), `README.md`, and `skills/browserforge/`.
+- **Windows Graphical Installer (Recommended)** (`BrowserForge-Setup-v*-x64.exe` / `arm64.exe`): Installs `browserforge.exe`, `browserforge-daemon.exe`, desktop shortcut, Windows startup autostart, user `PATH`, and companion `skills/browserforge/`.
+- **Windows Portable** (`browserforge_v*_windows_*.zip`): `browserforge.exe`, `browserforge-daemon.exe`, `README.md`, and `skills/browserforge/`.
 - **Linux / macOS** (`browserforge_v*_*.tar.gz`): `browserforge` CLI binary, `README.md`, and `skills/browserforge/`.
 - **Standalone AI Agent Skill** (`browserforge-skill_v*.zip`): extract directly into your agent's skills directory (e.g. `~/.gemini/config/skills/`, `~/.claude/skills/`, or `.agents/skills/`).
 
