@@ -95,10 +95,18 @@ func NewServer(st *store.Store) (*Server, error) {
 		panelTickets: map[string]time.Time{},
 	}
 	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+			return
+		}
+		http.Redirect(w, r, "/panel", http.StatusFound)
+	})
 	mux.HandleFunc("/health", s.withAuth(s.handleHealth))
 	mux.HandleFunc("/start", s.withAuth(s.handleStart))
 	mux.HandleFunc("/stop", s.withAuth(s.handleStop))
 	mux.HandleFunc("/shutdown", s.withAuth(s.handleShutdown))
+	mux.HandleFunc("/panel-ticket", s.withAuth(s.handlePanelTicket))
 	mux.HandleFunc("/panel/enter", s.handlePanelEnter)
 	mux.HandleFunc("/panel", s.handlePanelPage)
 	mux.HandleFunc("/panel/api/status", s.withPanelAuth(s.handlePanelStatus))
@@ -364,6 +372,19 @@ func RemoteStart(st *DaemonState, req launcher.StartRequest) (*launcher.StartRes
 	return &res, nil
 }
 
+func (s *Server) handlePanelTicket(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+	u, err := s.CreatePanelEnterURL()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "url": u})
+}
+
 // RemoteShutdown gracefully shuts down the running foreground daemon.
 func RemoteShutdown(st *DaemonState) error {
 	_, code, err := doRequest(st, http.MethodPost, "/shutdown", nil, 5*time.Second)
@@ -374,4 +395,23 @@ func RemoteShutdown(st *DaemonState) error {
 		return fmt.Errorf("daemon shutdown failed: HTTP %d", code)
 	}
 	return nil
+}
+
+// RequestPanelURL requests a fresh single-use authenticated panel URL from a running daemon.
+func RequestPanelURL(st *DaemonState) (string, error) {
+	raw, code, err := doRequest(st, http.MethodPost, "/panel-ticket", nil, 3*time.Second)
+	if err != nil {
+		return "", err
+	}
+	if code != http.StatusOK {
+		return "", fmt.Errorf("panel-ticket failed: HTTP %d", code)
+	}
+	var res struct {
+		OK  bool   `json:"ok"`
+		URL string `json:"url"`
+	}
+	if err := json.Unmarshal(raw, &res); err != nil || res.URL == "" {
+		return "", errors.New("invalid panel-ticket response")
+	}
+	return res.URL, nil
 }

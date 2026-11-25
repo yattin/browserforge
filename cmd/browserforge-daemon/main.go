@@ -44,7 +44,7 @@ func main() {
 	}
 	if existing, err := daemon.Probe(st.DataDir); err == nil && existing != nil {
 		if !quiet && !noTray {
-			showAlreadyRunningDialog(existing.PID, existing.Port)
+			showAlreadyRunningDialog(existing)
 		}
 		os.Exit(0)
 	}

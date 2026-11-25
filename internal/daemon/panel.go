@@ -83,8 +83,9 @@ func (s *Server) withPanelAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		s.setPanelSecurityHeaders(w)
 		origin := strings.TrimSpace(r.Header.Get("Origin"))
-		expectedOrigin := fmt.Sprintf("http://127.0.0.1:%d", s.state.Port)
-		if origin != "" && origin != expectedOrigin {
+		expectedLoopback := fmt.Sprintf("http://127.0.0.1:%d", s.state.Port)
+		expectedLocalhost := fmt.Sprintf("http://localhost:%d", s.state.Port)
+		if origin != "" && origin != expectedLoopback && origin != expectedLocalhost {
 			writeErr(w, http.StatusForbidden, "cross-origin forbidden")
 			return
 		}
@@ -273,12 +274,17 @@ const panelHTML = `<!doctype html>
   .dot { width:10px; height:10px; border-radius:50%; background:var(--accent); box-shadow:0 0 10px var(--accent); }
   .meta { color:var(--muted); font-size:13px; margin-top:4px; }
   .actions { display:flex; gap:8px; }
-  button { background:var(--btn); color:var(--text); border:1px solid var(--border); border-radius:8px; padding:7px 14px; font-size:13px; cursor:pointer; }
-  button:hover { border-color:#475569; }
+  button { background:var(--btn); color:var(--text); border:1px solid var(--border); border-radius:8px; padding:7px 14px; font-size:13px; cursor:pointer; transition:opacity .15s; }
+  button:hover:not(:disabled) { border-color:#475569; }
+  button:disabled { opacity:.55; cursor:wait; }
   button.primary { background:#059669; border-color:#059669; }
-  button.primary:hover { background:#047857; }
+  button.primary:hover:not(:disabled) { background:#047857; }
   button.danger { background:#7f1d1d; border-color:#991b1b; }
-  button.danger:hover { background:#991b1b; }
+  button.danger:hover:not(:disabled) { background:#991b1b; }
+  .toast { position:fixed; right:24px; bottom:24px; background:#1e293b; color:#f8fafc; border:1px solid #334155; border-radius:10px; padding:10px 16px; font-size:13px; box-shadow:0 10px 25px rgba(0,0,0,.45); opacity:0; pointer-events:none; transition:opacity .2s; max-width:420px; z-index:99; }
+  .toast.show { opacity:1; }
+  .toast.err { border-color:#ef4444; color:#fecaca; }
+  .toast.ok { border-color:#10b981; color:#a7f3d0; }
   .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:12px; margin-bottom:20px; }
   .stat { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:14px 16px; }
   .stat .k { color:var(--muted); font-size:12px; }
@@ -303,8 +309,8 @@ const panelHTML = `<!doctype html>
       <div class="meta" id="meta">Loading...</div>
     </div>
     <div class="actions">
-      <button onclick="load()">刷新</button>
-      <button class="danger" onclick="stopAll()">停止全部浏览器</button>
+      <button id="btn-refresh">刷新</button>
+      <button class="danger" id="btn-stop-all">停止全部浏览器</button>
     </div>
   </header>
   <div id="msg" class="msg"></div>
@@ -329,31 +335,102 @@ const panelHTML = `<!doctype html>
     </table>
   </div>
 </div>
+<div id="toast" class="toast"></div>
 <script>
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-function setMsg(t){ document.getElementById('msg').textContent = t || ''; }
+let toastTimer = null;
+const busyProfiles = new Set();
+let lastProfilesKey = '';
+let lastProxiesKey = '';
+
+function setMsg(t, kind) {
+  document.getElementById('msg').textContent = t || '';
+  const el = document.getElementById('toast');
+  if (!t) { el.className = 'toast'; return; }
+  el.textContent = t;
+  el.className = 'toast show' + (kind === 'err' ? ' err' : kind === 'ok' ? ' ok' : '');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.className = 'toast'; }, 4500);
+}
+
 async function api(path, body) {
-  const opts = body ? { method:'POST', headers:{'Content-Type':'application/json','X-BF-Panel':'1'}, body:JSON.stringify(body) } : {};
+  const opts = body
+    ? { method:'POST', credentials:'same-origin', headers:{'Content-Type':'application/json','X-BF-Panel':'1'}, body:JSON.stringify(body) }
+    : { credentials:'same-origin' };
   const r = await fetch(path, opts);
-  const d = await r.json();
+  const text = await r.text();
+  let d = {};
+  try { d = JSON.parse(text); } catch (_) { throw new Error('HTTP ' + r.status + ': ' + text.slice(0, 120)); }
   if (!r.ok || d.ok === false) throw new Error(d.error || ('HTTP ' + r.status));
   return d;
 }
-async function startProf(name) {
+
+async function startProf(name, btn) {
+  if (busyProfiles.has(name)) return;
+  busyProfiles.add(name);
+  if (btn) { btn.disabled = true; btn.textContent = '启动中...'; }
   setMsg('正在启动 ' + name + ' ...');
-  try { await api('/panel/api/start', { profile: name }); setMsg('已启动 ' + name); load(); }
-  catch(e) { setMsg('启动失败: ' + e.message); }
+  try {
+    await api('/panel/api/start', { profile: name });
+    setMsg('已启动 ' + name, 'ok');
+  } catch (e) {
+    setMsg('启动失败 (' + name + '): ' + e.message, 'err');
+  } finally {
+    busyProfiles.delete(name);
+    lastProfilesKey = '';
+    await load();
+  }
 }
-async function stopProf(name) {
+
+async function stopProf(name, btn) {
+  if (busyProfiles.has(name)) return;
+  busyProfiles.add(name);
+  if (btn) { btn.disabled = true; btn.textContent = '停止中...'; }
   setMsg('正在停止 ' + name + ' ...');
-  try { await api('/panel/api/stop', { profile: name }); setMsg('已停止 ' + name); load(); }
-  catch(e) { setMsg('停止失败: ' + e.message); }
+  try {
+    await api('/panel/api/stop', { profile: name });
+    setMsg('已停止 ' + name, 'ok');
+  } catch (e) {
+    setMsg('停止失败 (' + name + '): ' + e.message, 'err');
+  } finally {
+    busyProfiles.delete(name);
+    lastProfilesKey = '';
+    await load();
+  }
 }
+
 async function stopAll() {
+  const btn = document.getElementById('btn-stop-all');
+  if (btn) btn.disabled = true;
   setMsg('正在停止全部浏览器...');
-  try { const r = await api('/panel/api/stop', { all: true }); setMsg('已停止 ' + r.stopped + ' 个实例'); load(); }
-  catch(e) { setMsg('操作失败: ' + e.message); }
+  try {
+    const r = await api('/panel/api/stop', { all: true });
+    setMsg('已停止 ' + r.stopped + ' 个实例', 'ok');
+  } catch (e) {
+    setMsg('操作失败: ' + e.message, 'err');
+  } finally {
+    if (btn) btn.disabled = false;
+    lastProfilesKey = '';
+    await load();
+  }
 }
+
+document.getElementById('btn-refresh').addEventListener('click', () => {
+  lastProfilesKey = '';
+  lastProxiesKey = '';
+  load();
+});
+document.getElementById('btn-stop-all').addEventListener('click', stopAll);
+document.getElementById('tb-profiles').addEventListener('click', (ev) => {
+  const btn = ev.target.closest('button[data-action]');
+  if (!btn || btn.disabled) return;
+  const act = btn.getAttribute('data-action');
+  const name = btn.getAttribute('data-profile');
+  if (!name) return;
+  if (act === 'start') startProf(name, btn);
+  else if (act === 'stop') stopProf(name, btn);
+});
+
 async function load() {
   try {
     const d = await api('/panel/api/status');
@@ -363,27 +440,35 @@ async function load() {
     document.getElementById('s-kernel').textContent = d.kernel ? (d.kernel.kind + ' v' + d.kernel.version) : '未配置';
     document.getElementById('s-dir').textContent = d.daemon.data_dir;
 
-    const pRows = (d.profiles || []).map(p => '<tr>' +
-      '<td><strong>' + esc(p.name) + '</strong></td>' +
-      '<td>' + esc(p.template) + '<div class="meta">' + esc(p.timezone) + '</div></td>' +
-      '<td>' + esc(p.proxy_name || '直连') + '</td>' +
-      '<td><span class="pill ' + (p.running ? 'on">运行中' : 'off">已停止') + '</span></td>' +
-      '<td class="mono">' + (p.running ? ('PID ' + p.browser_pid + ' · CDP :' + p.debug_port + (p.proxy_port ? ' · Proxy :' + p.proxy_port : '')) : '-') + '</td>' +
-      '<td>' + (p.running
-        ? '<button class="danger" onclick="stopProf(\'' + esc(p.name) + '\')">停止</button>'
-        : '<button class="primary" onclick="startProf(\'' + esc(p.name) + '\')">启动</button>') + '</td>' +
-    '</tr>').join('');
-    document.getElementById('tb-profiles').innerHTML = pRows || '<tr><td colspan="6" style="color:#94a3b8">暂无环境</td></tr>';
+    const pKey = JSON.stringify(d.profiles || []) + '|' + Array.from(busyProfiles).join(',');
+    if (pKey !== lastProfilesKey && busyProfiles.size === 0) {
+      lastProfilesKey = pKey;
+      const pRows = (d.profiles || []).map(p => '<tr>' +
+        '<td><strong>' + esc(p.name) + '</strong></td>' +
+        '<td>' + esc(p.template) + '<div class="meta">' + esc(p.timezone) + '</div></td>' +
+        '<td>' + esc(p.proxy_name || '直连') + '</td>' +
+        '<td><span class="pill ' + (p.running ? 'on">运行中' : 'off">已停止') + '</span></td>' +
+        '<td class="mono">' + (p.running ? ('PID ' + p.browser_pid + ' · CDP :' + p.debug_port + (p.proxy_port ? ' · Proxy :' + p.proxy_port : '')) : '-') + '</td>' +
+        '<td>' + (p.running
+          ? '<button class="danger" data-action="stop" data-profile="' + esc(p.name) + '">停止</button>'
+          : '<button class="primary" data-action="start" data-profile="' + esc(p.name) + '">启动</button>') + '</td>' +
+      '</tr>').join('');
+      document.getElementById('tb-profiles').innerHTML = pRows || '<tr><td colspan="6" style="color:#94a3b8">暂无环境</td></tr>';
+    }
 
-    const xRows = (d.proxies || []).map(x => '<tr>' +
-      '<td>' + esc(x.name) + '</td>' +
-      '<td class="mono">' + esc(x.scheme + '://' + x.host + ':' + x.port) + '</td>' +
-      '<td class="mono">' + esc(x.exit_ip || '-') + '</td>' +
-      '<td>' + esc((x.exit_country || '-') + ' / ' + (x.exit_timezone || '-')) + '</td>' +
-    '</tr>').join('');
-    document.getElementById('tb-proxies').innerHTML = xRows || '<tr><td colspan="4" style="color:#94a3b8">暂无代理</td></tr>';
+    const xKey = JSON.stringify(d.proxies || []);
+    if (xKey !== lastProxiesKey) {
+      lastProxiesKey = xKey;
+      const xRows = (d.proxies || []).map(x => '<tr>' +
+        '<td>' + esc(x.name) + '</td>' +
+        '<td class="mono">' + esc(x.scheme + '://' + x.host + ':' + x.port) + '</td>' +
+        '<td class="mono">' + esc(x.exit_ip || '-') + '</td>' +
+        '<td>' + esc((x.exit_country || '-') + ' / ' + (x.exit_timezone || '-')) + '</td>' +
+      '</tr>').join('');
+      document.getElementById('tb-proxies').innerHTML = xRows || '<tr><td colspan="4" style="color:#94a3b8">暂无代理</td></tr>';
+    }
   } catch (e) {
-    setMsg('守护进程连接异常: ' + e.message);
+    setMsg('守护进程连接异常: ' + e.message, 'err');
   }
 }
 load();

@@ -8,4 +8,4 @@ func runTray(srv *daemon.Server, _ string) {
 	<-srv.Done()
 }
 
-func showAlreadyRunningDialog(_, _ int) {}
+func showAlreadyRunningDialog(_ *daemon.DaemonState) {}

@@ -483,12 +483,18 @@ func runTray(srv *daemon.Server, dataDir string) {
 	}
 }
 
-func showAlreadyRunningDialog(pid, port int) {
+func showAlreadyRunningDialog(existing *daemon.DaemonState) {
 	// When the user double-clicks the desktop shortcut while the daemon is already running,
-	// open the live BrowserForge status panel directly.
-	if port > 0 {
-		openShellTarget(fmt.Sprintf("http://127.0.0.1:%d/", port))
-		return
+	// mint a fresh single-use ticket and open the authenticated BrowserForge status panel directly.
+	if existing != nil {
+		if panelURL, err := daemon.RequestPanelURL(existing); err == nil && panelURL != "" {
+			openShellTarget(panelURL)
+			return
+		}
+	}
+	pid := 0
+	if existing != nil {
+		pid = existing.PID
 	}
 	title, _ := syscall.UTF16PtrFromString("BrowserForge")
 	body, _ := syscall.UTF16PtrFromString(fmt.Sprintf(
